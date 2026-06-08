@@ -180,24 +180,50 @@ resource "aws_route_table_association" "pri_rds" {
 }
 
 # Security Group Bastion
-resource "aws_security_group" "bssg" {
-  name        = "${var.class_no}_plab_bssg"
-  description = "security group for plab bastion"
-  vpc_id      = aws_vpc.plab_vpc.id
+# resource "aws_security_group" "bssg" {
+#   name        = "${var.class_no}_plab_bssg"
+#   description = "security group for plab bastion"
+#   vpc_id      = aws_vpc.plab_vpc.id
 
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+#   ingress {
+#     from_port   = 22
+#     to_port     = 22
+#     protocol    = "tcp"
+#     cidr_blocks = ["0.0.0.0/0"]
+#   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+#   egress {
+#     from_port   = 0
+#     to_port     = 0
+#     protocol    = "-1"
+#     cidr_blocks = ["0.0.0.0/0"]
+#   }
+# }
+
+# IAM Role for AWS Systems Manager
+resource "aws_iam_role" "ssm_role" {
+  name = "${var.class_no}_plab_ssm_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_attach" {
+  role       = aws_iam_role.ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "ssm_profile" {
+  name = "${var.class_no}_plab_ssm_profile"
+  role = aws_iam_role.ssm_role.name
 }
 
 # Security Group Web Server
@@ -206,20 +232,22 @@ resource "aws_security_group" "websvsg" {
   description = "security group for plab web server"
   vpc_id      = aws_vpc.plab_vpc.id
 
+  # ingress {
+  #   from_port       = 22
+  #   to_port         = 22
+  #   protocol        = "tcp"
+  #   security_groups = [aws_security_group.bssg.id]
+  # }
+
+# Security Group Web Server (Hanya Port 80 dari ALB)
   ingress {
-    from_port       = 22
-    to_port         = 22
+    from_port       = 80
+    to_port         = 80
     protocol        = "tcp"
-    security_groups = [aws_security_group.bssg.id]
+    security_groups = [aws_security_group.elbsg.id]
   }
 
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+# Penting: SSM membutuhkan akses keluar (egress) ke internet/endpoint SSM via NAT GW
   egress {
     from_port   = 0
     to_port     = 0
@@ -238,7 +266,7 @@ resource "aws_security_group" "rdssg" {
     from_port   = 3306
     to_port     = 3306
     protocol    = "tcp"
-    cidr_blocks = ["10.11.0.0/16"]
+    security_groups = [aws_security_group.websvsg.id]
   }
 
   egress {
@@ -271,38 +299,48 @@ resource "aws_security_group" "elbsg" {
 }
 
 # Bastion Server
-resource "aws_instance" "bastion" {
-  ami                         = "ami-0c101f26f147fa7fd"
-  instance_type               = "t2.micro"
-  subnet_id                   = aws_subnet.pub_a.id
-  key_name                    = var.key_name
-  vpc_security_group_ids      = [aws_security_group.bssg.id]
-  associate_public_ip_address = true
+# resource "aws_instance" "bastion" {
+#   ami                         = "ami-0c101f26f147fa7fd"
+#   instance_type               = "t2.micro"
+#   subnet_id                   = aws_subnet.pub_a.id
+#   key_name                    = var.key_name
+#   vpc_security_group_ids      = [aws_security_group.bssg.id]
+#   associate_public_ip_address = true
 
-  tags = {
-    Name = "plab_bastion"
-  }
-}
+#   tags = {
+#     Name = "plab_bastion"
+#   }
+# }
+
+
+# EC2 Instances (Menggunakan IAM Instance Profile)
 
 # Web Server A
 resource "aws_instance" "websv_a" {
-  ami                    = "ami-0c101f26f147fa7fd"
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.pri_a.id
-  key_name               = var.key_name
-  vpc_security_group_ids = [aws_security_group.websvsg.id]
+  ami                  = "ami-0c101f26f147fa7fd"
+  instance_type        = "t2.micro"
+  subnet_id            = aws_subnet.pri_a.id
+
+  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
+
+  vpc_security_group_ids = [
+    aws_security_group.websvsg.id
+  ]
 
   user_data = <<-EOF
               #!/bin/bash
               dnf install -y httpd php php-fpm php-mysqli php-json php-devel
-              systemctl start httpd
               systemctl enable httpd
+              systemctl start httpd
               echo "<?php print '<h1>Hello SV1A</h1>'; ?>" > /var/www/html/hello.php
               EOF
 
   tags = {
     Name = "plab_websv_a"
   }
+   depends_on = [
+    aws_iam_role_policy_attachment.ssm_attach
+  ]
 }
 
 # AMI
@@ -317,11 +355,15 @@ resource "aws_ami_from_instance" "web_ami" {
 
 # Web Server B
 resource "aws_instance" "websv_b" {
-  ami                    = aws_ami_from_instance.web_ami.id
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.pri_b.id
-  key_name               = var.key_name
-  vpc_security_group_ids = [aws_security_group.websvsg.id]
+  ami                  = aws_ami_from_instance.web_ami.id
+  instance_type        = "t2.micro"
+  subnet_id            = aws_subnet.pri_b.id
+
+  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
+
+  vpc_security_group_ids = [
+    aws_security_group.websvsg.id
+  ]
 
   user_data = <<-EOF
               #!/bin/bash
@@ -332,6 +374,9 @@ resource "aws_instance" "websv_b" {
   tags = {
     Name = "plab_websv_b"
   }
+  depends_on = [
+    aws_iam_role_policy_attachment.ssm_attach
+  ]
 }
 
 # Target Group
@@ -419,8 +464,7 @@ resource "aws_db_instance" "rds" {
 
   publicly_accessible = false
 
-  skip_final_snapshot       = false
-  final_snapshot_identifier = "plab-db-final-snapshot"
+  skip_final_snapshot = true
 
   tags = {
     Name = "plab-db"
