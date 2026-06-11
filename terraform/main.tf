@@ -132,7 +132,7 @@ resource "aws_route_table" "pub_rt" {
   }
 }
 
-resource "aws_route_table" "pri_rt" {
+resource "aws_route_table" "pri_rt_a" {
   vpc_id = aws_vpc.plab_vpc.id
 
   route {
@@ -141,7 +141,20 @@ resource "aws_route_table" "pri_rt" {
   }
 
   tags = {
-    Name = "${var.class_no}_pri_rt"
+    Name = "${var.class_no}_pri_rt_a"
+  }
+}
+
+resource "aws_route_table" "pri_rt_b" {
+  vpc_id = aws_vpc.plab_vpc.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.natgw_b.id
+  }
+
+  tags = {
+    Name = "${var.class_no}_pri_rt_b"
   }
 }
 
@@ -166,12 +179,12 @@ resource "aws_route_table_association" "pub_b" {
 
 resource "aws_route_table_association" "pri_a" {
   subnet_id      = aws_subnet.pri_a.id
-  route_table_id = aws_route_table.pri_rt.id
+  route_table_id = aws_route_table.pri_rt_a.id
 }
 
 resource "aws_route_table_association" "pri_b" {
   subnet_id      = aws_subnet.pri_b.id
-  route_table_id = aws_route_table.pri_rt.id
+  route_table_id = aws_route_table.pri_rt_b.id
 }
 
 resource "aws_route_table_association" "pri_rds" {
@@ -330,6 +343,8 @@ resource "aws_instance" "websv_a" {
   user_data = <<-EOF
               #!/bin/bash
               dnf install -y httpd php php-fpm php-mysqli php-json php-devel
+              systemctl enable amazon-ssm-agent
+              systemctl start amazon-ssm-agent
               systemctl enable httpd
               systemctl start httpd
               echo "<?php print '<h1>Hello SV1A</h1>'; ?>" > /var/www/html/hello.php
@@ -367,6 +382,8 @@ resource "aws_instance" "websv_b" {
 
   user_data = <<-EOF
               #!/bin/bash
+              systemctl enable amazon-ssm-agent
+              systemctl start amazon-ssm-agent
               sleep 30
               echo "<?php print '<h1>Hello SV1B</h1>'; ?>" > /var/www/html/hello.php
               EOF
