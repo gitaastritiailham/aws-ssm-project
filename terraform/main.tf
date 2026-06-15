@@ -279,7 +279,7 @@ resource "aws_security_group" "rdssg" {
     from_port   = 3306
     to_port     = 3306
     protocol    = "tcp"
-    cidr_blocks = ["10.11.0.0/16"]
+    security_groups = [aws_security_group.websvsg.id]
   }
 
   egress {
