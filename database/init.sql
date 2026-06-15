@@ -1,5 +1,5 @@
-CREATE DATABASE ie3a_db;
-USE ie3a_db;
+CREATE DATABASE ie3a26_db;
+USE ie3a26_db;
 
 CREATE TABLE products (
   sid varchar(255) NOT NULL,
